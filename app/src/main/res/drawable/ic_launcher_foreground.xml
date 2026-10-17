@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 間取り（L字の部屋）と家具の簡易アイコン。108dp基準、セーフゾーン内 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineJoin="round"
+        android:pathData="M34,34 H74 V58 H58 V74 H34 Z" />
+    <path
+        android:fillColor="#F2B134"
+        android:pathData="M40,40 h16 v10 h-16 z" />
+    <path
+        android:fillColor="#9FD3C7"
+        android:pathData="M40,58 h12 v10 h-12 z" />
+</vector>
