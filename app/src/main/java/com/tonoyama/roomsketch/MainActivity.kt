@@ -214,6 +214,7 @@ fun ProjectScreen(vm: MainViewModel, project: Project, snackbar: SnackbarHostSta
         BackHandler { editingRoom = null }
         RoomEditor(
             initial = room,
+            wallThickness = project.wallThickness,
             onCancel = { editingRoom = null },
             onSave = { r ->
                 vm.edit { p ->

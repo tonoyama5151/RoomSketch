@@ -2,7 +2,12 @@ package com.tonoyama.roomsketch
 
 import android.app.Application
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.Base64
 import android.net.Uri
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -15,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import java.io.ByteArrayOutputStream
 import java.io.File
 
 data class ProjectSummary(val id: String, val name: String, val updatedAt: Long, val rooms: Int, val furniture: Int)
@@ -224,5 +230,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return Intent.createChooser(send, "共有")
     }
 
+    // ───────── 下絵 ─────────
+
+    /** 画像を読み込み、長辺 2000px 以下の JPEG にして下絵に設定する。 */
+    fun importBackground(uri: Uri) {
+        viewModelScope.launch {
+            val bg = withContext(Dispatchers.IO) {
+                runCatching {
+                    val cr = getApplication<Application>().contentResolver
+                    val src = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } ?: return@runCatching null
+                    val k = minOf(1.0, 2000.0 / maxOf(src.width, src.height))
+                    val bmp = if (k < 1.0) Bitmap.createScaledBitmap(src, (src.width * k).toInt(), (src.height * k).toInt(), true) else src
+                    val out = ByteArrayOutputStream()
+                    bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                    val cur = _current.value
+                    val b = cur?.let { projectBounds(it) }
+                    Background(
+                        data = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP),
+                        wPx = bmp.width, hPx = bmp.height,
+                        mmPerPx = 10000.0 / bmp.width, // 仮に幅10mとして置く。あとで縮尺を合わせる
+                        x = b?.minX ?: 0.0, y = b?.minY ?: 0.0,
+                    )
+                }.getOrNull()
+            }
+            if (bg == null) toast("画像を読み込めませんでした")
+            else { edit { it.copy(background = bg) }; toast("下絵を置きました。次に「縮尺を合わせる」で実寸に合わせてください") }
+        }
+    }
+
     fun safeName(s: String) = s.replace(Regex("[\\\\/:*?\"<>|\\s]"), "_").ifBlank { "roomsketch" }
 }
+
+/** 下絵の Base64 を画像にする。 */
+fun decodeBackground(b: Background?): ImageBitmap? = runCatching {
+    if (b == null) return@runCatching null
+    val bytes = Base64.decode(b.data, Base64.NO_WRAP)
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+}.getOrNull()

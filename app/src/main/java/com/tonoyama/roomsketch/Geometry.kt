@@ -141,10 +141,15 @@ fun walls(room: Room): List<Wall> {
     }
 }
 
+/** 間仕切りを「壁1本」として扱う。inward は a→b の左側（画面上で a→b に向かって左）。 */
+fun partitionWall(p: Partition): Wall {
+    val u = (p.b - p.a).norm()
+    return Wall(p.a, p.b, Pt(-u.y, u.x))
+}
+
 /** 開き戸の開閉範囲（扇形を凸多角形で近似）。 */
-fun doorSwing(room: Room, o: Opening): List<Pt>? {
+fun doorSwing(w: Wall, o: Opening): List<Pt>? {
     if (o.type != OpeningType.DOOR_SWING) return null
-    val w = walls(room).getOrNull(o.wallIndex) ?: return null
     val p0 = w.a + w.dir * o.offset
     val p1 = w.a + w.dir * (o.offset + o.width)
     val hinge = if (o.hingeAtEnd) p1 else p0
@@ -159,17 +164,44 @@ fun doorSwing(room: Room, o: Opening): List<Pt>? {
     return pts
 }
 
-/** 柱の外形、収納扉の前の空きなど、壁から内側に張り出す矩形。 */
-fun wallBox(room: Room, o: Opening, depth: Double): List<Pt>? {
-    val w = walls(room).getOrNull(o.wallIndex) ?: return null
+fun doorSwing(room: Room, o: Opening): List<Pt>? = walls(room).getOrNull(o.wallIndex)?.let { doorSwing(it, o) }
+
+/** 壁から内側に張り出す矩形（柱、収納扉の前の空きなど）。 */
+fun wallBox(w: Wall, o: Opening, depth: Double): List<Pt> {
     val p0 = w.a + w.dir * o.offset
     val p1 = w.a + w.dir * (o.offset + o.width)
     return listOf(p0, p1, p1 + w.inward * depth, p0 + w.inward * depth)
 }
 
-fun openingSegment(room: Room, o: Opening): Pair<Pt, Pt>? {
-    val w = walls(room).getOrNull(o.wallIndex) ?: return null
-    return (w.a + w.dir * o.offset) to (w.a + w.dir * (o.offset + o.width))
+fun wallBox(room: Room, o: Opening, depth: Double): List<Pt>? = walls(room).getOrNull(o.wallIndex)?.let { wallBox(it, o, depth) }
+
+fun openingSegment(w: Wall, o: Opening): Pair<Pt, Pt> = (w.a + w.dir * o.offset) to (w.a + w.dir * (o.offset + o.width))
+
+fun openingSegment(room: Room, o: Opening): Pair<Pt, Pt>? = walls(room).getOrNull(o.wallIndex)?.let { openingSegment(it, o) }
+
+private val PASSABLE = setOf(OpeningType.DOOR_SWING, OpeningType.DOOR_SLIDING, OpeningType.CLOSET)
+
+/** 間仕切りのうち、ドア等の開口を除いた「実体のある部分」（厚み付きの矩形）。 */
+fun partitionSolids(p: Partition): List<List<Pt>> {
+    val w = partitionWall(p)
+    val len = w.length
+    if (len < 1) return emptyList()
+    val cuts = p.openings.filter { it.type in PASSABLE }.map { it.offset.coerceIn(0.0, len) to (it.offset + it.width).coerceIn(0.0, len) }.sortedBy { it.first }
+    val spans = mutableListOf<Pair<Double, Double>>()
+    var cur = 0.0
+    for ((s0, e0) in cuts) { if (s0 > cur + 1) spans += cur to s0; cur = maxOf(cur, e0) }
+    if (cur < len - 1) spans += cur to len
+    val half = w.inward * (p.thickness / 2)
+    return spans.map { (s0, e0) ->
+        val a = w.a + w.dir * s0; val b = w.a + w.dir * e0
+        listOf(a - half, b - half, b + half, a + half)
+    }
+}
+
+/** 間仕切りの開口の通り道を描くための区間。 */
+fun partitionOpenings(p: Partition): List<Pair<Opening, Pair<Pt, Pt>>> {
+    val w = partitionWall(p)
+    return p.openings.map { it to openingSegment(w, it) }
 }
 
 // ───────── 部屋の形の作成 ─────────
@@ -227,19 +259,24 @@ data class Bounds(val minX: Double, val minY: Double, val maxX: Double, val maxY
 fun bounds(points: List<Pt>): Bounds? =
     if (points.isEmpty()) null else Bounds(points.minOf { it.x }, points.minOf { it.y }, points.maxOf { it.x }, points.maxOf { it.y })
 
-/** 部屋をドラッグ中、他の部屋の壁と平行に近い壁を吸着させる移動量。 */
-fun snapRoomDelta(moving: Room, others: List<Room>, tol: Double): Pt {
+/**
+ * 部屋をドラッグ中、他の部屋の壁に吸着させる移動量。
+ * 向かい合う壁は gap（壁の厚さ）だけ離し、同じ向きの壁は面をそろえる。
+ */
+fun snapRoomDelta(moving: Room, others: List<Room>, tol: Double, gap: Double = 0.0): Pt {
     val mine = walls(moving)
     var bestX: Double? = null; var bestY: Double? = null
     for (o in others) for (w2 in walls(o)) for (w1 in mine) {
         val vert1 = abs(w1.a.x - w1.b.x) < 1; val vert2 = abs(w2.a.x - w2.b.x) < 1
         val hor1 = abs(w1.a.y - w1.b.y) < 1; val hor2 = abs(w2.a.y - w2.b.y) < 1
+        val facing = w1.inward.dot(w2.inward) < 0
+        val off = if (facing) w2.inward * -gap else Pt(0.0, 0.0)
         if (vert1 && vert2) {
-            val dx = w2.a.x - w1.a.x
+            val dx = w2.a.x + off.x - w1.a.x
             if (abs(dx) < tol && (bestX == null || abs(dx) < abs(bestX))) bestX = dx
         }
         if (hor1 && hor2) {
-            val dy = w2.a.y - w1.a.y
+            val dy = w2.a.y + off.y - w1.a.y
             if (abs(dy) < tol && (bestY == null || abs(dy) < abs(bestY))) bestY = dy
         }
     }
@@ -319,6 +356,17 @@ fun checkLayout(project: Project): List<Issue> {
         OpeningType.CLOSET -> if (o.depth > 0) wallBox(r, o, o.depth)?.let { closets += "${r.name}の収納扉" to it }
         else -> {}
     }
+    val blockers = mutableListOf<List<Pt>>() // ぶつかってはいけない間仕切り
+    val sliders = mutableListOf<List<Pt>>() // 引き戸の間仕切り（開けて使うこともあるので警告）
+    for (pt in project.partitions) {
+        val w = partitionWall(pt)
+        if (pt.kind == PartitionKind.SLIDING) sliders += partitionSolids(pt) else blockers += partitionSolids(pt)
+        for (o in pt.openings) when (o.type) {
+            OpeningType.DOOR_SWING -> doorSwing(w, o)?.let { doors += "間仕切りの開き戸" to it }
+            OpeningType.CLOSET -> if (o.depth > 0) closets += "間仕切りの収納扉" to wallBox(w, o, o.depth)
+            else -> {}
+        }
+    }
 
     for ((i, item) in items.withIndex()) {
         val (pl, f) = item
@@ -336,12 +384,14 @@ fun checkLayout(project: Project): List<Issue> {
             }
         }
         if (pillars.any { convexOverlap(poly, it) }) issues += Issue(pl.id, Level.ERROR, "${f.name}：柱と重なっています")
+        if (blockers.any { convexOverlap(poly, it) }) issues += Issue(pl.id, Level.ERROR, "${f.name}：間仕切り（壁）と重なっています")
+        if (sliders.any { convexOverlap(poly, it) }) issues += Issue(pl.id, Level.WARN, "${f.name}：引き戸の間仕切りにかかっています")
         doors.filter { convexOverlap(poly, it.second) }.forEach { issues += Issue(pl.id, Level.WARN, "${f.name}：${it.first}の開閉範囲に入っています") }
         closets.filter { convexOverlap(poly, it.second) }.forEach { issues += Issue(pl.id, Level.WARN, "${f.name}：${it.first}の前をふさいでいます") }
         // 前面・背面の空き
         for (z in clearanceZones(pl, f)) {
             val blocked = items.any { (pl2, _) -> pl2.id != pl.id && convexOverlap(z, polys.getValue(pl2.id)) } ||
-                pillars.any { convexOverlap(z, it) } ||
+                pillars.any { convexOverlap(z, it) } || blockers.any { convexOverlap(z, it) } ||
                 rooms.none { insidePolygon(z, it.worldVertices()) }
             if (blocked) { issues += Issue(pl.id, Level.WARN, "${f.name}：前後に必要な空きが足りません"); break }
         }
@@ -373,3 +423,126 @@ fun fmtCm(v: Double): String {
 }
 
 fun dist(a: Pt, b: Pt) = sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y))
+
+
+// ───────── 部屋の形の編集（図で編集） ─────────
+
+/** 重複点と、一直線上に並んだ中間点を取り除く。 */
+fun cleanupPolygon(v: List<Pt>, removeCollinear: Boolean = true): List<Pt> {
+    val pts = v.toMutableList()
+    var changed = true
+    while (changed && pts.size > 3) {
+        changed = false
+        for (i in pts.indices) {
+            val a = pts[(i - 1 + pts.size) % pts.size]; val b = pts[i]; val c = pts[(i + 1) % pts.size]
+            val dup = (b - a).len() < 1.0
+            val col = removeCollinear && abs((b - a).norm().cross((c - b).norm())) < 1e-4 && (b - a).dot(c - b) > 0
+            if (dup || col) { pts.removeAt(i); changed = true; break }
+        }
+    }
+    return pts
+}
+
+/** 頂点 i の角を、手前の壁に沿って a、次の壁に沿って b だけ四角く欠く（柱の出っ張りなど）。 */
+fun cutCorner(v: List<Pt>, i: Int, a: Double, b: Double): List<Pt> {
+    val n = v.size
+    val p = v[i]
+    val uPrev = (p - v[(i - 1 + n) % n]).norm()
+    val uNext = (v[(i + 1) % n] - p).norm()
+    val q1 = p - uPrev * a
+    val q2 = p - uPrev * a + uNext * b
+    val q3 = p + uNext * b
+    val out = v.toMutableList()
+    out.removeAt(i)
+    out.addAll(i, listOf(q1, q2, q3))
+    return cleanupPolygon(out)
+}
+
+/**
+ * 壁 i（頂点 i → i+1）に凹み（depth>0：部屋が内側にへこむ）または出っ張り（depth<0）を作る。
+ * offset は壁の始点から凹みの端まで。
+ */
+fun addNotch(v: List<Pt>, i: Int, offset: Double, width: Double, depth: Double): List<Pt> {
+    val ws = walls(Room(vertices = v))
+    val w = ws.getOrNull(i) ?: return v
+    val p1 = w.a + w.dir * offset
+    val p2 = p1 + w.inward * depth
+    val p3 = p2 + w.dir * width
+    val p4 = w.a + w.dir * (offset + width)
+    val out = v.toMutableList()
+    out.addAll(i + 1, listOf(p1, p2, p3, p4))
+    return cleanupPolygon(out)
+}
+
+/** 壁 i の中点に角を足す。 */
+fun splitWall(v: List<Pt>, i: Int): List<Pt> {
+    val a = v[i]; val b = v[(i + 1) % v.size]
+    val out = v.toMutableList()
+    out.add(i + 1, (a + b) * 0.5)
+    return out
+}
+
+fun deleteVertex(v: List<Pt>, i: Int): List<Pt> = if (v.size <= 3) v else v.toMutableList().apply { removeAt(i) }
+
+/**
+ * 壁 i の長さを len にする。終点を壁の向きに動かし、次の壁が直角なら次の壁ごと平行移動する
+ * （直角の間取りを崩さずに寸法だけ直すため）。
+ */
+fun setWallLength(v: List<Pt>, i: Int, len: Double): List<Pt> {
+    val n = v.size
+    val a = v[i]; val bi = (i + 1) % n; val b = v[bi]
+    val u = (b - a).norm()
+    val shift = u * (len - (b - a).len())
+    val ci = (bi + 1) % n
+    val nextDir = (v[ci] - b).norm()
+    val out = v.toMutableList()
+    out[bi] = b + shift
+    if (abs(u.dot(nextDir)) < 0.01 && ci != i) out[ci] = v[ci] + shift
+    return out
+}
+
+/** 壁 i を法線方向に平行移動する（両端の頂点を一緒に動かす）。 */
+fun moveWall(v: List<Pt>, i: Int, delta: Pt): List<Pt> {
+    val n = v.size
+    val a = v[i]; val b = v[(i + 1) % n]
+    val u = (b - a).norm()
+    val normal = Pt(-u.y, u.x)
+    val d = normal * delta.dot(normal)
+    return v.toMutableList().apply { this[i] = a + d; this[(i + 1) % n] = b + d }
+}
+
+/**
+ * 頂点の数が変わったとき、ドア・窓などを元と同じ位置の壁に付け替える。
+ * 付け替え先が見つからない要素は元の番号のまま残す（画面で赤く表示される）。
+ */
+fun remapOpenings(old: List<Pt>, new: List<Pt>, openings: List<Opening>): List<Opening> {
+    if (old.size == new.size) return openings
+    val ow = walls(Room(vertices = old)); val nw = walls(Room(vertices = new))
+    return openings.map { o ->
+        val w = ow.getOrNull(o.wallIndex) ?: return@map o
+        val p0 = w.a + w.dir * (o.offset + o.width / 2)
+        val j = nw.indexOfFirst { x -> distToSeg(p0, x.a, x.b) < 2.0 && x.dir.dot(w.dir) > 0.999 }
+        if (j < 0) o else o.copy(wallIndex = j, offset = (p0 - nw[j].a).dot(nw[j].dir) - o.width / 2)
+    }
+}
+
+/**
+ * なぞり・ドラッグ時の吸着。
+ * 1) 近くの既存の点（部屋の角・間仕切りの端）に吸着
+ * 2) 基準点 ref から見て水平・垂直に近ければそろえる
+ * 3) 10mm 単位に丸める
+ */
+fun snapPoint(p: Pt, ref: Pt?, anchors: List<Pt>, tolMm: Double): Pt {
+    anchors.minByOrNull { (it - p).len() }?.let { if ((it - p).len() < tolMm) return it }
+    var x = Math.round(p.x / 10.0) * 10.0
+    var y = Math.round(p.y / 10.0) * 10.0
+    if (ref != null) {
+        if (abs(p.x - ref.x) < tolMm) x = ref.x
+        if (abs(p.y - ref.y) < tolMm) y = ref.y
+    }
+    // 既存の点とも縦横をそろえる
+    anchors.forEach { a -> if (abs(p.x - a.x) < tolMm / 2) x = a.x; if (abs(p.y - a.y) < tolMm / 2) y = a.y }
+    return Pt(x, y)
+}
+
+fun anchorPoints(p: Project): List<Pt> = p.rooms.flatMap { it.worldVertices() } + p.partitions.flatMap { listOf(it.a, it.b) }

@@ -72,7 +72,8 @@ fun LayoutTab(vm: MainViewModel, project: Project, view: ViewT?, setView: (ViewT
     val dims = remember(project, selected) {
         if (sel == null || selF == null) emptyList() else {
             val obstacles = layout.placements.filter { it.id != sel.id }.mapNotNull { pl -> project.furnitureById(pl.furnitureId)?.let { furniturePoly(pl, it) } } +
-                project.rooms.flatMap { r -> r.openings.filter { it.type == OpeningType.PILLAR }.mapNotNull { wallBox(r, it, it.depth) } }
+                project.rooms.flatMap { r -> r.openings.filter { it.type == OpeningType.PILLAR }.mapNotNull { wallBox(r, it, it.depth) } } +
+                project.partitions.flatMap { partitionSolids(it) }
             dimensionLines(sel, selF, project.rooms, obstacles)
         }
     }
@@ -114,7 +115,7 @@ fun LayoutTab(vm: MainViewModel, project: Project, view: ViewT?, setView: (ViewT
                 view = view,
                 onView = { setView(it) },
                 modifier = Modifier.fillMaxSize(),
-                hitTest = { w ->
+                hitTest = { w, _ ->
                     layout.placements.lastOrNull { pl -> project.furnitureById(pl.furnitureId)?.let { pointInPolygon(w, furniturePoly(pl, it)) } == true }?.id
                 },
                 onDragStart = { id ->

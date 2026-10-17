@@ -193,7 +193,7 @@ private val ROUTE_PRESETS = listOf(
 fun RouteTab(vm: MainViewModel, project: Project) {
     var editing by remember { mutableStateOf<RoutePoint?>(null) }
     val ctx = LocalContext.current
-    val targets = project.furniture.filter { it.status != FurnitureStatus.DISPOSE }
+    val targets = project.furniture.filter { it.isMoving() }
     val results = targets.map { it to routeCheck(it, project.route) }.sortedBy { (_, r) -> r.all { it.ok } }
 
     LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

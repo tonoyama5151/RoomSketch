@@ -46,10 +46,23 @@ data class Opening(
     val swingInside: Boolean = true,// 開き戸：この部屋側に開く
 )
 
+/** 部屋の種類。塗り色と、家具を置く場所かどうかの目安に使う。 */
+@Serializable
+enum class RoomKind(val label: String, val fill: Long) {
+    ROOM("居室", 0xFFF7F1E3),
+    HALL("廊下", 0xFFF1EFEA),
+    ENTRANCE("玄関", 0xFFE9E7E2),
+    WET("水回り", 0xFFE6F0F4),
+    STORAGE("収納", 0xFFEFE6D6),
+    TATAMI("和室", 0xFFE4EDD5),
+    BALCONY("バルコニー", 0xFFE5E5E5),
+}
+
 @Serializable
 data class Room(
     val id: String = newId(),
     val name: String = "部屋",
+    val kind: RoomKind = RoomKind.ROOM,
     val origin: Pt = Pt(0.0, 0.0),          // 住戸全体での位置
     val vertices: List<Pt> = emptyList(),   // origin からの相対座標
     val ceiling: Double = 2400.0,
@@ -62,7 +75,10 @@ data class Room(
 enum class FurnitureShape(val label: String) { RECT("矩形"), ROUND("円形") }
 
 @Serializable
-enum class FurnitureStatus(val label: String) { BRING("持参"), CANDIDATE("購入候補"), DISPOSE("処分予定") }
+enum class FurnitureStatus(val label: String) { BRING("持参"), CANDIDATE("購入候補"), DISPOSE("処分予定"), FIXED("備え付け") }
+
+/** 搬入・未配置の集計に含める家具か（処分予定・備え付けは除く）。 */
+fun Furniture.isMoving() = status == FurnitureStatus.BRING || status == FurnitureStatus.CANDIDATE
 
 @Serializable
 data class Furniture(
@@ -100,6 +116,38 @@ data class Layout(
 )
 
 @Serializable
+enum class PartitionKind(val label: String) {
+    WALL("壁"),
+    LOW_WALL("腰壁・カウンター"),
+    SLIDING("引き戸の間仕切り"),
+}
+
+/** 部屋の中や部屋どうしの間に引く、自由な間仕切り（壁）。座標は住戸全体のmm。 */
+@Serializable
+data class Partition(
+    val id: String = newId(),
+    val a: Pt,
+    val b: Pt,
+    val thickness: Double = 100.0,
+    val kind: PartitionKind = PartitionKind.WALL,
+    val height: Double = 2400.0,
+    val openings: List<Opening> = emptyList(), // wallIndex は常に 0
+)
+
+/** 間取り図の下絵。画像は JPEG を Base64 で持つ（共有ファイルにも含まれる）。 */
+@Serializable
+data class Background(
+    val data: String,
+    val wPx: Int,
+    val hPx: Int,
+    val mmPerPx: Double,
+    val x: Double = 0.0,
+    val y: Double = 0.0,
+    val opacity: Float = 0.5,
+    val visible: Boolean = true,
+)
+
+@Serializable
 data class RoutePoint(
     val id: String = newId(),
     val name: String = "玄関ドア",
@@ -112,6 +160,9 @@ data class Project(
     val id: String = newId(),
     val name: String = "新居",
     val rooms: List<Room> = emptyList(),
+    val partitions: List<Partition> = emptyList(),
+    val wallThickness: Double = 120.0, // 部屋どうしの間の壁の厚さ（吸着の間隔・描画）
+    val background: Background? = null,
     val furniture: List<Furniture> = emptyList(),
     val layouts: List<Layout> = listOf(Layout()),
     val activeLayoutId: String? = null,
