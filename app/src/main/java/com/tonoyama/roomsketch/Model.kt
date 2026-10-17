@@ -143,7 +143,7 @@ data class Background(
     val mmPerPx: Double,
     val x: Double = 0.0,
     val y: Double = 0.0,
-    val opacity: Float = 0.5,
+    val opacity: Float = 0.5f,
     val visible: Boolean = true,
 )
 
