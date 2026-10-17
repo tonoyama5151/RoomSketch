@@ -245,7 +245,7 @@ fun edgesFromVertices(v: List<Pt>): Pair<List<EdgeSpec>, Double> {
         var t = heads[(i + 1) % v.size] - heads[i]
         while (t > 180) t -= 360
         while (t <= -180) t += 360
-        EdgeSpec((v[(i + 1) % v.size] - v[i]).len(), Math.round(t * 10) / 10.0)
+        EdgeSpec((v[(i + 1) % v.size] - v[i]).len(), Math.round(t).toDouble()) // 角度の初期値は整数
     }
     return edges to heads[0]
 }
@@ -415,12 +415,17 @@ fun routeCheck(f: Furniture, route: List<RoutePoint>): List<RouteResult> {
     }
 }
 
-fun fmtMm(v: Double): String = Math.round(v).toString()
-/** mm を cm 表記に（小数1桁、.0 は省略）。 */
-fun fmtCm(v: Double): String {
-    val cm = Math.round(v) / 10.0
-    return if (cm == Math.floor(cm)) "${cm.toLong()}cm" else "${cm}cm"
+/** 数値を小数 decimals 桁に丸めて表示（末尾の 0 は省略）。値そのものは丸めない。 */
+fun fmtDec(v: Double, decimals: Int): String {
+    val s = java.math.BigDecimal(v).setScale(decimals, java.math.RoundingMode.HALF_UP).toPlainString()
+    return if (s.contains('.')) s.trimEnd('0').trimEnd('.') else s
 }
+
+/** mm 表記（0.1mm単位）。 */
+fun fmtMm(v: Double): String = fmtDec(v, 1)
+
+/** mm を cm 表記に（0.1mm＝0.01cm 単位、末尾の 0 は省略）。 */
+fun fmtCm(v: Double): String = fmtDec(v / 10.0, 2) + "cm"
 
 fun dist(a: Pt, b: Pt) = sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y))
 
@@ -546,3 +551,57 @@ fun snapPoint(p: Pt, ref: Pt?, anchors: List<Pt>, tolMm: Double): Pt {
 }
 
 fun anchorPoints(p: Project): List<Pt> = p.rooms.flatMap { it.worldVertices() } + p.partitions.flatMap { listOf(it.a, it.b) }
+
+
+// ───────── なぞった形の直角補正 ─────────
+
+/** snappedCorners：直角にそろえた角の数。-1 は補正量が大きすぎて見送ったことを表す。 */
+data class Regularized(val vertices: List<Pt>, val snappedCorners: Int)
+
+private fun normTurn(t: Double): Double { var r = t; while (r > 180) r -= 360; while (r <= -180) r += 360; return r }
+
+/**
+ * なぞった多角形を整える。
+ * - 90°±tol の角は 90° に、最初の壁の向きは水平・垂直±tol なら軸にそろえる
+ * - 向きを固定したまま、壁の長さだけを最小限（長い壁ほど多く）直して形を閉じる
+ *   （重み 1/L の最小二乗：δi = −Li·(di·λ)、(Σ Li di diᵀ) λ = 閉合誤差）
+ * 補正が破綻する（壁が潰れる等）ときは、元の形のまま返す。
+ */
+fun regularizeTrace(v: List<Pt>, tolDeg: Double = 10.0): Regularized {
+    val n = v.size
+    if (n < 3) return Regularized(v, 0)
+    val len = (0 until n).map { (v[(it + 1) % n] - v[it]).len() }
+    val head = (0 until n).map { val d = v[(it + 1) % n] - v[it]; deg(atan2(d.y, d.x)) }
+    var snapped = 0
+    // 最初の壁の向き
+    var h0 = head[0]
+    val axis = Math.round(h0 / 90.0) * 90.0
+    if (abs(h0 - axis) <= tolDeg) h0 = axis
+    val newHead = MutableList(n) { 0.0 }
+    newHead[0] = h0
+    for (i in 1 until n) {
+        var t = normTurn(head[i] - head[i - 1])
+        if (abs(abs(t) - 90.0) <= tolDeg) { if (abs(t) != 90.0) snapped++; t = if (t > 0) 90.0 else -90.0 }
+        newHead[i] = newHead[i - 1] + t
+    }
+    // 最後の角（壁 n-1 → 壁 0）は、閉じた結果として決まる
+
+    val dirs = newHead.map { Pt(cos(rad(it)), sin(rad(it))) }
+    var ex = 0.0; var ey = 0.0
+    var m11 = 0.0; var m12 = 0.0; var m22 = 0.0
+    for (i in 0 until n) {
+        val d = dirs[i]; val l = len[i]
+        ex += l * d.x; ey += l * d.y
+        m11 += l * d.x * d.x; m12 += l * d.x * d.y; m22 += l * d.y * d.y
+    }
+    val det = m11 * m22 - m12 * m12
+    if (abs(det) < 1e-6) return Regularized(v, 0)
+    val lx = (ex * m22 - ey * m12) / det
+    val ly = (m11 * ey - m12 * ex) / det
+    val newLen = (0 until n).map { len[it] - len[it] * (dirs[it].x * lx + dirs[it].y * ly) }
+    // 15%（短い壁は100mm）を超えて長さが変わる壁があれば、なぞりのずれが大きいので補正を見送る
+    if ((0 until n).any { newLen[it] < 10.0 || abs(newLen[it] - len[it]) > maxOf(0.15 * len[it], 100.0) }) return Regularized(v, if (snapped > 0) -1 else 0)
+    val out = mutableListOf(v[0])
+    for (i in 0 until n - 1) out += out.last() + dirs[i] * newLen[i]
+    return Regularized(cleanupPolygon(out), snapped)
+}

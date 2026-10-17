@@ -230,7 +230,7 @@ fun FloorTab(vm: MainViewModel, project: Project, view: ViewT?, setView: (ViewT?
                         FloorTool.PARTITION -> selPart = id?.takeIf { it.startsWith("p:") }?.removePrefix("p:") ?: if (id == "pa" || id == "pb") selPart else null
                         FloorTool.TRACE -> {
                             if (id == "first") {
-                                finishTrace(trace.toList(), project)?.let { onEdit(it) }
+                                finishTrace(trace.toList(), project, vm)?.let { onEdit(it) }
                                 trace.clear()
                             } else trace.add(snapFrom(trace.lastOrNull(), w, anchors, 20.0 / sc))
                         }
@@ -274,7 +274,7 @@ fun FloorTab(vm: MainViewModel, project: Project, view: ViewT?, setView: (ViewT?
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
-                            Button(enabled = trace.size >= 3, onClick = { finishTrace(trace.toList(), project)?.let { onEdit(it) }; trace.clear() }) { Text("完成") }
+                            Button(enabled = trace.size >= 3, onClick = { finishTrace(trace.toList(), project, vm)?.let { onEdit(it) }; trace.clear() }) { Text("完成") }
                             OutlinedButton(enabled = trace.isNotEmpty(), onClick = { trace.removeAt(trace.size - 1) }) { Text("1つ戻す") }
                             TextButton(enabled = trace.isNotEmpty(), onClick = { trace.clear() }) { Text("やめる") }
                         }
@@ -360,10 +360,16 @@ fun FloorTab(vm: MainViewModel, project: Project, view: ViewT?, setView: (ViewT?
     }
 }
 
-/** なぞった点から部屋を作る（原点は最初の点）。 */
-private fun finishTrace(pts: List<Pt>, project: Project): Room? {
-    val v = cleanupPolygon(pts, removeCollinear = true)
-    if (v.size < 3 || abs(signedArea(v)) < 10_000) return null
+/** なぞった点から部屋を作る（原点は最初の点）。90°±10°の角は直角にそろえ、壁の長さで閉じる。 */
+private fun finishTrace(pts: List<Pt>, project: Project, vm: MainViewModel): Room? {
+    val v0 = cleanupPolygon(pts, removeCollinear = true)
+    if (v0.size < 3 || abs(signedArea(v0)) < 10_000) return null
+    val reg = regularizeTrace(v0)
+    val v = reg.vertices
+    when {
+        reg.snappedCorners > 0 -> vm.toast("${reg.snappedCorners}か所の角を90°にそろえ、壁の長さを補正しました")
+        reg.snappedCorners < 0 -> vm.toast("なぞりのずれが大きいため、直角補正をせずに作成しました（図で編集で直せます）")
+    }
     val o = v.first()
     return Room(name = "部屋${project.rooms.size + 1}", origin = o, vertices = v.map { it - o })
 }

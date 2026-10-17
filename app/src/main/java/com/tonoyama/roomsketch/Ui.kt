@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 /** mm の数値入力。外から値が変わったときだけ表示を書き換える。 */
 @Composable
 fun NumField(label: String, value: Double, onChange: (Double) -> Unit, modifier: Modifier = Modifier, suffix: String = "mm", allowNegative: Boolean = false) {
+    // 表示は 0.1 単位に丸める（値そのものは丸めずに保持）
     var text by remember { mutableStateOf(fmtNum(value)) }
     LaunchedEffect(value) { if (text.toDoubleOrNull() != value) text = fmtNum(value) }
     OutlinedTextField(
@@ -51,7 +52,7 @@ fun NumField(label: String, value: Double, onChange: (Double) -> Unit, modifier:
     )
 }
 
-fun fmtNum(v: Double): String = if (v == Math.floor(v)) v.toLong().toString() else v.toString()
+fun fmtNum(v: Double): String = fmtDec(v, 1)
 
 @Composable
 fun <T> Choices(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit, modifier: Modifier = Modifier) {
